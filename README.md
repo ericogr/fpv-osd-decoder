@@ -56,9 +56,10 @@ many frames it had a value, and what it means.
 
 | option | effect |
 |---|---|
-| `-o file` | output CSV (default: the `.osd` name with `.csv`; `-` for stdout) |
+| `-profile name` | what to export: `default` (the CSV with every column and frame) or `maps` (a KML for Google My Maps; see [Profiles](#profiles)) |
+| `-o file` | output file (default: the `.osd` name with `.csv`, or `.<profile>.kml` for `maps`; `-` for stdout) |
 | `-srt file` | `.srt` to join (default: same name as the `.osd`, if it exists; `none` disables) |
-| `-sep c` | column separator (default `,`) |
+| `-sep c` | CSV column separator (default `,`) |
 | `-decimal c` | decimal separator, `.` or `,` (default `.`) |
 | `-mode x,y,width` | where the flight mode is shown on the OSD (default `45,16,4`) |
 | `-msg-row N` | row of the status messages (default `13`; `-1` disables) |
@@ -69,6 +70,63 @@ many frames it had a value, and what it means.
 are text without an anchor icon: they can only be found by position, and that
 depends on the layout configured in INAV. The defaults match `AvatarG0031`. For
 another layout, run with `-unmapped` and look at what was left on the screen.
+
+### Profiles
+
+A profile decides what goes into the output file. `-profile default`, which is
+what you get without the option, writes the CSV with every column of every
+frame, as described above.
+
+`-profile maps` does not write a CSV: it writes a **KML** that Google My Maps
+imports as a layer with the flight path and the GPS points:
+
+```sh
+fpv-osd csv -profile maps AvatarG0031.osd      # writes AvatarG0031.maps.kml
+```
+
+- **The path:** the way flight log converters (PX4's `ulog2kml`, ArduPilot's
+  `mavkml`) draw it: one line per stretch flown in the same flight mode, each in
+  its own colour, named after the mode (`AvatarG0031 CRUZ`). A stretch starts
+  where the one before it ended, so there is no gap. ACRO is orange, ANGL blue,
+  CRUZ green, RTH red and MANU magenta; any other mode gets a spare colour
+  (yellow, cyan, violet, white), and the rows before the first mode is read are
+  grey. A mode that blinks out of the OSD keeps the last one read.
+- **The altitude** (`osd_altitude_m`) goes into every position and the path is
+  `relativeToGround`, because the OSD altitude is measured from the take-off
+  point: Google Earth lifts the path off the ground. A reading that is missing
+  keeps the last one, and the first rows count as 0. Without an altitude in the
+  recording the path hugs the terrain. My Maps is flat and ignores it.
+- **The points:** one per position, drawn as small dots without a label
+  (Google Earth would otherwise put a pushpin on each one), and named with the
+  video time (`16:29`), which shows when you click one, each with the colour of
+  its flight mode. The
+  description lists, as plain text, `t_ms` and these attributes, with the same
+  names and units as in the default profile: `osd_flight_mode`,
+  `osd_altitude_m`, `osd_gps_speed_kmh`, `osd_air_speed_kmh`, `osd_heading_deg`,
+  `osd_home_dist_m`, `osd_gps_sats`, `osd_rssi_dbm`, `osd_lq_pct`,
+  `srt_signal`, `osd_batt_cell_v`, `osd_batt_v` and `osd_current_a`. Only the
+  ones the recording has are written. Nothing else is: no attitude, wind,
+  throttle or messages.
+- Only rows with a **valid position**: both coordinates present, in range, and
+  not `0,0`. A position equal to the one before it is dropped, since a point
+  that does not move adds nothing to a map.
+- **At most 2000 points.** That is My Maps' limit for a spreadsheet; the KML
+  keeps it so the points stay as easy to handle. If more are left, they are
+  thinned out evenly; the first and the last always stay. The path goes through
+  the points that were kept.
+- The program fails if the recording has no valid position. `-sep` and
+  `-decimal` do not apply to this profile and are refused.
+
+When it finishes, the summary says how many rows were left out and why. In My
+Maps, create a map, choose **Import** on a layer and pick the `.kml`. The map is
+flat, so the altitude does not raise a point; it is in the description, like
+the other attributes.
+
+My Maps does not import everything a KML can hold (folders, `MultiGeometry`,
+time elements and HTML balloons are dropped), so the file is a flat list of
+plain placemarks. It is not limited to what My Maps reads, though: Google Earth
+opens it as well. The 5 MB limit of My Maps for unzipped KML is far from the
+size of a flight (about 1 MB).
 
 ### Spreadsheets with a Portuguese (Brazil) locale
 
@@ -81,7 +139,8 @@ fpv-osd csv -sep ';' -decimal ',' AvatarG0031.osd
 
 `-decimal ','` only changes numbers; texts such as `osd_message` are left
 untouched. When importing, leave the separator on "Detect automatically" or
-choose "Semicolon". `make csv` does this for every `.osd` in the folder.
+choose "Semicolon". `make csv` does this for every `.osd` in the folder. Do not
+use it for Google My Maps; see the `maps` profile above.
 
 ## `dump`: inspect the raw screens
 

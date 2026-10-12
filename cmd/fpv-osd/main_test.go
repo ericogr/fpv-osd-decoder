@@ -80,6 +80,11 @@ func TestRunMain(t *testing.T) {
 		{"dump census", []string{"dump", "-census", osdFile}, 0, "{RSSI}", ""},
 		{"csv bad -mode", []string{"csv", "-mode", "1,2", osdFile}, 2, "", "-mode must be x,y,width"},
 		{"csv bad -sep", []string{"csv", "-sep", ";;", osdFile}, 2, "", "invalid -sep/-decimal"},
+		{"csv unknown profile", []string{"csv", "-profile", "frobnicate", osdFile}, 2, "", `unknown profile "frobnicate"`},
+		{"csv maps profile has no separator", []string{"csv", "-profile", "maps", "-sep", ";", osdFile}, 2, "", "do not apply to -profile maps"},
+		{"csv maps profile has no decimal", []string{"csv", "-profile", "maps", "-decimal", ",", osdFile}, 2, "", "do not apply to -profile maps"},
+		{"csv maps profile without GPS", []string{"csv", "-profile", "maps", "-o", "-", osdFile}, 1, "", "profile maps: the recording has no valid GPS position"},
+		{"csv explicit default profile", []string{"csv", "-q", "-profile", "default", "-o", "-", osdFile}, 0, "t_ms\n0\n151\n", ""},
 		{"csv to stdout", []string{"csv", "-q", "-o", "-", osdFile}, 0, "t_ms\n0\n151\n", ""},
 		{"csv prints the summary", []string{"csv", "-o", "-", osdFile}, 0, "", "OSD: 6x2 grid, 2 frames"},
 		{"csv -unmapped", []string{"csv", "-q", "-unmapped", "-o", "-", osdFile}, 0, "", "AB"},
@@ -117,5 +122,32 @@ func TestCSVWithoutSRT(t *testing.T) {
 	// the tiny grid holds no telemetry, so only the time column remains
 	if want := "t_ms\n0\n151\n"; string(got) != want {
 		t.Errorf("csv = %q, want %q", got, want)
+	}
+}
+
+// A profile other than the default must not overwrite the full CSV.
+func TestCSVDefaultOutputNameHasTheProfile(t *testing.T) {
+	data, err := os.ReadFile(sampleFlight)
+	if err != nil {
+		t.Skip("AvatarG0031.osd is not in the project")
+	}
+	dir := t.TempDir()
+	osdFile := filepath.Join(dir, "flight.osd")
+	if err := os.WriteFile(osdFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		profile, want string
+	}{
+		{"maps", "flight.maps.kml"},
+		{"default", "flight.csv"},
+	} {
+		var stderr bytes.Buffer
+		if code := runMain([]string{"csv", "-q", "-profile", tt.profile, osdFile}, nil, &stderr); code != 0 {
+			t.Fatalf("%s: exit code = %d: %s", tt.profile, code, &stderr)
+		}
+		if _, err := os.Stat(filepath.Join(dir, tt.want)); err != nil {
+			t.Errorf("-profile %s: %v", tt.profile, err)
+		}
 	}
 }

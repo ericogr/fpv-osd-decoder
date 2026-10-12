@@ -35,6 +35,14 @@ const (
 	keyWindDir      = "osd_wind_dir_deg"
 )
 
+// Keys of the columns that other packages pick out of a table.
+const (
+	KeyLat        = keyLat
+	KeyLon        = keyLon
+	KeyAltitude   = keyAltitude
+	KeyFlightMode = keyFlightMode
+)
+
 // Field describes a telemetry column that can come out of the OSD.
 type Field struct {
 	Key      string // CSV column name (unit as suffix)
