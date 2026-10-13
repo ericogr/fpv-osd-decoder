@@ -14,6 +14,15 @@ the same flight (video link data) by time.
 **Supported today:** `.osd` files recorded by Walksnail (Avatar) goggles while
 the flight controller runs **INAV**. Other video systems are not supported yet.
 
+## Download
+
+Each [release](https://github.com/ericogr/fpv-osd-decoder/releases) has
+ready-made binaries for Windows (x64), Linux (x64 and arm64) and macOS (Intel and
+Apple Silicon), plus a `SHA256SUMS` file. Unpack the archive and run `fpv-osd`
+(`fpv-osd.exe` on Windows) from a terminal. If macOS refuses to open a binary
+downloaded through the browser, clear the quarantine flag with
+`xattr -d com.apple.quarantine fpv-osd`.
+
 ## Build
 
 Needs Go 1.26 or newer (see `go.mod`). `make` is optional.
@@ -416,7 +425,25 @@ internal/export     joins OSD telemetry and SRT into a table and writes it as CS
 | `make check` | format check + `go vet` + tests |
 | `make fmt` / `make vet` / `make tidy` | `gofmt -w`, `go vet`, `go mod tidy` |
 | `make install` | installs `fpv-osd` into `GOBIN` |
-| `make clean` | removes `bin/` and `coverage.out` |
+| `make dist` | cross-compiles the release archives (Linux, Windows, macOS) and `SHA256SUMS` into `dist/`; `VERSION=v1.0.0` names them (`fpv-osd_1.0.0_linux_amd64.tar.gz`), `PLATFORMS="linux/amd64"` limits the targets |
+| `make clean` | removes `bin/`, `dist/` and `coverage.out` |
+
+### Continuous integration and releases
+
+`.github/workflows/ci.yml` runs on every push to `main` and on pull requests:
+format check and `go vet` on Linux, the tests on Linux, Windows and macOS, and a
+`make dist` build whose archives are kept as a workflow artifact for 7 days.
+
+To publish a release, push a version tag:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+`.github/workflows/release.yml` then runs the checks, builds the archives with
+`make dist` and creates the GitHub release with generated notes. A tag with a
+suffix (`v1.0.0-rc1`) is marked as a pre-release.
 
 Recordings (`*.osd`, `*.srt`) and generated `*.csv` files are git-ignored. The
 end-to-end tests use `AvatarG0031.osd` when it is in the project folder and are

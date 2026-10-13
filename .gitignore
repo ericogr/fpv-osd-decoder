@@ -2,6 +2,7 @@
 *.osd
 *.srt
 *.csv
+*.kml
 
 # Built binaries (anchored so cmd/fpv-osd stays tracked)
 /fpv-osd

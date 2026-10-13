@@ -12,9 +12,14 @@ CMD  ?= csv
 FILE ?= AvatarG0031.osd
 ARGS ?=
 
+# Release archives: the dist target builds one per os/arch pair into DIST_DIR
+VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+DIST_DIR  ?= dist
+PLATFORMS ?= linux/amd64 linux/arm64 windows/amd64 darwin/amd64 darwin/arm64
+
 .DEFAULT_GOAL := build
 
-.PHONY: help build csv run install test cover vet fmt fmt-check check tidy clean
+.PHONY: help build dist csv run install test cover vet fmt fmt-check check tidy clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -22,6 +27,26 @@ help: ## Show this help
 build: ## Build fpv-osd into bin/
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -trimpath -o $(BIN_DIR)/ ./cmd/...
+
+dist: ## Cross-compile release archives for every PLATFORMS pair into dist/
+	@rm -rf $(DIST_DIR)
+	@mkdir -p $(DIST_DIR)
+	@set -e; for p in $(PLATFORMS); do \
+		os=$${p%/*}; arch=$${p#*/}; \
+		name=fpv-osd_$(VERSION:v%=%)_$${os}_$${arch}; \
+		exe=fpv-osd; if [ "$$os" = windows ]; then exe=fpv-osd.exe; fi; \
+		echo "building $$name"; \
+		mkdir -p $(DIST_DIR)/$$name; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags '-s -w' -o $(DIST_DIR)/$$name/$$exe ./cmd/fpv-osd; \
+		cp LICENSE README.md $(DIST_DIR)/$$name/; \
+		if [ "$$os" = windows ]; then \
+			(cd $(DIST_DIR) && zip -qr $$name.zip $$name); \
+		else \
+			tar --owner=0 --group=0 --numeric-owner -C $(DIST_DIR) -czf $(DIST_DIR)/$$name.tar.gz $$name; \
+		fi; \
+		rm -rf $(DIST_DIR)/$$name; \
+	done
+	@cd $(DIST_DIR) && shasum -a 256 * > SHA256SUMS
 
 csv: build ## Convert every .osd in FILES to CSV (SEP and DECIMAL set the format)
 	@test -n "$(FILES)" || { echo "no .osd files found (set FILES=...)"; exit 1; }
@@ -55,4 +80,4 @@ tidy: ## Tidy go.mod
 	$(GO) mod tidy
 
 clean: ## Remove build and coverage output
-	rm -rf $(BIN_DIR) coverage.out
+	rm -rf $(BIN_DIR) $(DIST_DIR) coverage.out
