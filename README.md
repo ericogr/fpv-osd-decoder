@@ -1,12 +1,15 @@
-# fpv-osd-decoder
+# FPV OSD Decoder
 
 Turns the OSD recordings of FPV video systems into CSV telemetry.
 
 An OSD file does not store numbers. It stores the **screen** the pilot saw,
 frame by frame, as a grid of font glyphs. This tool reads those glyphs,
 recognizes each field by its icon and unit, and writes one CSV column per
-telemetry type it finds. It also joins the `.srt` of the same flight (video
-link data) by time.
+telemetry type it finds. It reads most of the telemetry elements of INAV 9.1.0
+(see [Limitations](#limitations) for the ones it does not), and a number it
+finds next to a glyph it does not know still gets a column (see
+[Readings no rule knows](#readings-no-rule-knows)). It also joins the `.srt` of
+the same flight (video link data) by time.
 
 **Supported today:** `.osd` files recorded by Walksnail (Avatar) goggles while
 the flight controller runs **INAV**. Other video systems are not supported yet.
@@ -26,7 +29,6 @@ or without `make`: `go build -o fpv-osd ./cmd/fpv-osd`.
 
 ```sh
 fpv-osd csv AvatarG0031.osd      # writes AvatarG0031.csv, joining AvatarG0031.srt if it exists
-fpv-osd dump -stats AvatarG0031.osd
 ```
 
 One binary, two subcommands:
@@ -61,15 +63,39 @@ many frames it had a value, and what it means.
 | `-srt file` | `.srt` to join (default: same name as the `.osd`, if it exists; `none` disables) |
 | `-sep c` | CSV column separator (default `,`) |
 | `-decimal c` | decimal separator, `.` or `,` (default `.`) |
-| `-mode x,y,width` | where the flight mode is shown on the OSD (default `45,16,4`) |
-| `-msg-row N` | row of the status messages (default `13`; `-1` disables) |
-| `-unmapped` | lists what was left on the screen undecoded |
+| `-mode x,y,width` | where the flight mode is shown on the OSD (default `auto`: found in the recording) |
+| `-msg-row N` | row of the status messages (default `auto`: found in the recording; `-1` disables) |
+| `-unmapped` | lists what was left on the screen undecoded (after the readings that got an `osd_raw_*` column) |
 | `-q` | does not print the column summary |
 
-`-mode` and `-msg-row` exist because the flight mode and the status messages
-are text without an anchor icon: they can only be found by position, and that
-depends on the layout configured in INAV. The defaults match `AvatarG0031`. For
-another layout, run with `-unmapped` and look at what was left on the screen.
+The flight mode and the status messages are text without an anchor icon, so no
+rule can recognize them by their glyphs, and where they are depends on the
+layout the pilot set up in INAV. The program looks for them in the recording
+and prints what it found in the `layout:` line of the summary:
+
+```
+layout: flight mode at 45,16,4 (found); status messages on row 13 (found)
+```
+
+- **The flight mode** is always four characters and always one of a short list
+  of names (`ACRO`, `ANGL`, `CRUZ`, `RTH`, `HOLD`...), and it is on screen in
+  nearly every frame. The positions where those names show up most often are
+  the element. A name inside a longer word does not count, and neither does a
+  position seen less than a fifth as often as the best one (the message
+  `(HOLD)` is not a layout). A recording with two layouts that show the mode in two places gets
+  both.
+- **The status messages** are free text, so there is no list to look for. They
+  are the text that changes: of what is left on the screen after everything
+  else was read, the row that shows the most different texts. It is taken only
+  when no other row shows as many, when the row has at least two different
+  texts with a word of three letters or more, and when the text is not a plus
+  code. A name that never changes (the craft name) is not a message.
+
+When one of them is not found, its column is left out and the `layout:` line
+says so. Then give the position yourself: `-mode x,y,width` and `-msg-row N`
+override the search. `dump -region x,y,width` and `-unmapped` show where the
+text is. The position is the same for the whole recording, so with a layout
+switch the messages are only read in the layouts that have them on that row.
 
 ### Profiles
 
@@ -99,9 +125,8 @@ fpv-osd csv -profile maps AvatarG0031.osd      # writes AvatarG0031.maps.kml
 - **The points:** one per position, drawn as small dots without a label
   (Google Earth would otherwise put a pushpin on each one), and named with the
   video time (`16:29`), which shows when you click one, each with the colour of
-  its flight mode. The
-  description lists, as plain text, `t_ms` and these attributes, with the same
-  names and units as in the default profile: `osd_flight_mode`,
+  its flight mode. The description lists, as plain text, `t_ms` and these
+  attributes, with the same names and units as in the default profile: `osd_flight_mode`,
   `osd_altitude_m`, `osd_gps_speed_kmh`, `osd_air_speed_kmh`, `osd_heading_deg`,
   `osd_home_dist_m`, `osd_gps_sats`, `osd_rssi_dbm`, `osd_lq_pct`,
   `srt_signal`, `osd_batt_cell_v`, `osd_batt_v` and `osd_current_a`. Only the
@@ -148,7 +173,6 @@ use it for Google My Maps; see the `maps` profile above.
 |---|---|
 | `-frame N`, `-n N` | prints `N` frames starting at frame index `-frame` (defaults 0 and 1) |
 | `-hex` | shows non-ASCII glyphs by name (`{ALT_M}`) or code |
-| `-stats` | grid size, number of frames and duration |
 | `-census` | glyphs present, in how many frames and at which positions |
 | `-region x,y,width` | distinct values of a strip of cells across all frames |
 
@@ -160,7 +184,11 @@ fpv-osd dump -census AvatarG0031.osd            # glyphs present and where
 
 ## Output columns
 
-OSD (`osd_*`, shown by the flight controller):
+OSD (`osd_*`, shown by the flight controller). The first group was checked
+against a recording; the others are read as the INAV 9.1.0 firmware draws them
+(see [Limitations](#limitations)).
+
+**Checked against a recording**
 
 | column | meaning |
 |---|---|
@@ -180,6 +208,48 @@ OSD (`osd_*`, shown by the flight controller):
 | `osd_home_dir_deg` | direction of home relative to the direction of flight (22.5° steps) |
 | `osd_wind_speed_kmh`, `osd_wind_dir_deg` | estimated wind and its direction relative to the nose (45° steps) |
 
+**Read from the INAV 9.1.0 source**
+
+| column | meaning |
+|---|---|
+| `osd_rssi_pct` | RSSI as a percentage (the MAX glyph is 100) |
+| `osd_lq_down_pct`, `osd_snr_db` | CRSF downlink link quality (%); signal-to-noise ratio (dB) |
+| `osd_tx_power_mw`, `osd_rx_power_mw` | power of the uplink transmitter, and of the downlink one on the aircraft (mW) |
+| `osd_rx_band`, `osd_rx_mode` | receiver band and mode (text) |
+| `osd_vtx_channel`, `osd_vtx_power` | video transmitter band and channel (such as `R1`) and power level (text) |
+| `osd_on_time_s`, `osd_rth_time_left_s`, `osd_glide_time_s` | time since power-on; flight time left before the return to home must start; glide time left (s) |
+| `osd_clock` | real-time clock, `HH:MM:SS` (text) |
+| `osd_batt_pct` | remaining battery charge (%) |
+| `osd_wh_used`, `osd_wh_per_km`, `osd_power_w`, `osd_impedance_mohm` | energy used (Wh), efficiency (Wh/km), power (W), supply impedance (mOhm) |
+| `osd_gps_hdop` | GPS horizontal dilution of precision |
+| `osd_ground_course_deg`, `osd_azimuth_deg`, `osd_home_heading_error_deg` | GPS course over the ground; azimuth of the aircraft seen from home; angle between the direction of flight and the direction of home |
+| `osd_rth_dist_left_m`, `osd_glide_range_m`, `osd_cross_track_error_m` | distance that can still be flown before the return to home must start; glide range; cross-track error (m) |
+| `osd_fence_dist_h_m`, `osd_fence_dist_v_m` | horizontal and vertical distance to the nearest geofence zone (m; vertical is negative below it) |
+| `osd_odometer_km`, `osd_rangefinder_m`, `osd_glideslope` | distance travelled in all flights (km); rangefinder (m); glide ratio |
+| `osd_3d_speed_kmh`, `osd_vspeed_ms` | 3D speed (km/h); vertical speed (m/s, + = climbing) |
+| `osd_gps_max_speed_kmh`, `osd_air_max_speed_kmh`, `osd_3d_max_speed_kmh`, `osd_min_ground_speed_kmh` | maximum ground speed, airspeed and 3D speed of the flight; minimum ground speed set for navigation (km/h) |
+| `osd_wind_vspeed_kmh` | estimated vertical wind (km/h, + = up) |
+| `osd_imu_temp_c`, `osd_baro_temp_c`, `osd_esc_temp_c`, `osd_temp_sensor_c` | temperatures (Celsius; Fahrenheit is converted) |
+| `osd_esc_rpm` | motor speed reported by the ESC (rpm) |
+| `osd_gforce_x`, `osd_gforce_y`, `osd_gforce_z` | G-force on each axis |
+| `osd_climb_eff_mah_per_m` | climb efficiency, as the OSD shows it |
+| `osd_profile`, `osd_blackbox_log` | active configuration profile; number of the blackbox log |
+| `osd_gvar_0`, `osd_gvar_1`, `osd_gvar_2`, `osd_gvar_3` | global variables of the INAV programming framework |
+
+`osd_mah_per_km` also reads the efficiency per mile and per nautical mile (in
+mAh) and per km in Ah, which INAV shows depending on its unit setting, and
+converts it to mAh/km. Ah per mile and per nautical mile are not read (see
+[Limitations](#limitations)).
+Distances, altitudes and speeds in miles, feet or knots are converted to
+metres, kilometres per hour and so on as well.
+
+In `AvatarG0031`, four of these appear, in the last frames before the
+statistics (the layout INAV shows after disarming has them): `osd_imu_temp_c`
+(40), `osd_baro_temp_c` (42), `osd_on_time_s` (20:59) and `osd_odometer_km`
+(10.3, consistent with the 10.35 km of the statistics that follow). They match
+the screen, which is the only check the other columns of this group have had so
+far.
+
 SRT (`srt_*`, the video link data recorded with the flight): `srt_signal`,
 `srt_channel`, `srt_flight_time_s`, `srt_sky_batt_v`, `srt_ground_batt_v`,
 `srt_latency_ms`, `srt_bitrate_mbps`, `srt_link_dist_m`. A field the tool does
@@ -192,6 +262,28 @@ battery") is the voltage of the **aircraft** battery, and `srt_ground_batt_v`
 
 Each OSD frame is joined to the SRT entry whose time interval covers its
 `t_ms`.
+
+### Readings no rule knows
+
+A number next to a glyph that no rule recognizes still becomes a column. Its
+name is `osd_raw_` and the names of the glyphs around the number, as they are in
+INAV's `osd_symbols.h`, in lowercase and joined by double underscores (a name has
+single ones inside it, so two glyphs side by side cannot be mistaken for one
+glyph): `{HDP_L}{HDP_R}1.2` would be `osd_raw_hdp_l__hdp_r`, and `35{TEMP_C}`,
+`osd_raw_temp_c`. The value is
+what is on screen, with no unit conversion and no rounding. These columns come
+after the OSD ones and are sorted by name.
+
+It reads only what it can trust:
+
+- a number with a glyph right before it (an icon, perhaps with blanks between)
+  or right after it (a unit). A bare number, a label, or text is not taken: there
+  is no telling what it is, and `-unmapped` lists them.
+- not on the INAV splash screen shown while arming (all it holds is totals and
+  the version) and not on the statistics screen (see [Limitations](#limitations)).
+- one column per name. If the same glyphs show a number twice on the screen, the
+  first (top to bottom, left to right) keeps the column and the other is listed
+  by `-unmapped`.
 
 ## How it works
 
@@ -207,7 +299,9 @@ Each `u16` is a code from the INAV OSD font: ASCII for letters, digits and
 `- : .`, and dedicated glyphs for icons and units (the `SYM_*` table from
 INAV's `src/main/drivers/osd_symbols.h`, in `internal/inav/symbols_gen.go`). A
 field is recognized by its glyphs, for example `[HOME] 1.41 [km]` is the
-distance to home, so it does not matter where on the screen it is.
+distance to home, so it does not matter where on the screen it is. The only
+exceptions are the flight mode and the status message, which are text with no
+glyph (see [`csv`](#csv-convert-a-flight-to-csv)).
 
 Details that matter when reading it:
 
@@ -217,35 +311,96 @@ Details that matter when reading it:
   decoder reads the unit glyph of each frame and converts everything to a
   single unit per column.
 - **Arrows** (home direction, wind) are glyphs; they become degrees.
-- **Blinking elements** disappear in some frames; they are left empty.
-- **Splash and stats screens:** in `AvatarG0031` the first 25 frames and the
-  last 20 carry no flight telemetry, so the OSD columns are empty there.
+- **Blinking elements** disappear in some frames; they are left empty. A wind
+  estimate that is not valid yet shows a `*` where the unit goes, and is treated
+  the same way.
+- **Two elements that look alike:** some elements are drawn in exactly the same
+  way (see [Limitations](#limitations)), so the glyphs cannot say which is
+  which. The first one on the screen keeps the column. The other one is not
+  lost when it is a number next to glyphs, as most are: it goes to an
+  `osd_raw_*` column.
+- **Other screens:** INAV draws a splash screen while arming (with its logo) and
+  the flight statistics after disarming. The splash screen is read like any
+  other, since it shows the position, but nothing is taken from it by the generic
+  pass. The statistics screen (its title is `*** STATS`) is not read at all: its
+  numbers are summaries of the flight, not what the aircraft was doing then.
+  Neither of the two has a flight mode or a status message. In `AvatarG0031`,
+  the first 25 frames are the splash screen, which carries the position, and the
+  last 20 are the statistics.
+- **Speed:** each rule would have to run on every row of every frame, so the
+  decoder first checks which glyphs a row holds and skips the rules that need
+  one it does not have. A test checks that this never changes what is read.
 
 ## Limitations
 
-- Validated against one recording (`AvatarG0031`, INAV 9.1.0). Another OSD
-  layout may need `-mode` and `-msg-row`, and may show fields the rules do not
-  know; `-unmapped` lists them.
-- The artificial horizon, the crosshair, the variometer and the splash, stats
-  and post-flight screens are not decoded. `AvatarG0031` also shows a constant
-  `M0` label whose meaning is unknown.
-- The precision is what is on screen, at the OSD refresh rate (~6.6 frames/s).
-  Raw flight controller telemetry cannot be recovered.
-- The OSD and SRT clocks were checked to agree within about 1 s; the join is
-  not verified at millisecond level.
-- `symbols_gen.go` was generated from `osd_symbols.h` on INAV's `master`
-  branch while the recordings come from firmware 9.1.0; glyphs added or moved
-  between versions may require regenerating the table.
+- **What was checked.** The first group of columns was checked against one
+  recording (`AvatarG0031`, INAV 9.1.0). The second group was written from the
+  format strings of `src/main/io/osd.c` in INAV 9.1.0 and is tested with frames
+  built from those strings, not with recordings; only four of its columns have
+  appeared in the sample flight (see [Output columns](#output-columns)). Expect
+  to adjust them when a recording with those elements turns up.
+- **Layouts.** The OSD of the sample has more than one layout (the one shown when
+  armed and the one shown when disarmed), and a recording may have others. Every
+  element but two is found wherever the pilot put it. The position of the flight
+  mode and of the status messages is found in the recording (see
+  [`csv`](#csv-convert-a-flight-to-csv)); the search for the messages is a
+  heuristic, which prefers to find nothing over a wrong row. It can fail when
+  the messages never change in the recording, when another text changes as often
+  as they do (a custom element, say), or when the mode is drawn in some way the
+  list of names does not cover, for example by another INAV version. The
+  message is the text the rules left on its row, so another element on that row
+  is read as itself and is not part of it; the other side of this is that a
+  piece of text that a rule takes for a reading (`CH:`, `G1:`, a clock time) is
+  not part of the message either.
+- **Glyphs that look like text.** A few glyphs of the font sit on the codes of
+  ASCII punctuation, so the same characters in a text (the craft name is free
+  text) can look like a reading. The Ah per km glyph is a quote: a digit followed
+  by a quote in a text is read as an efficiency. The Ah per mile and per nautical
+  mile glyphs (`$` and `?`) are not read for that reason, and the transmitter
+  power glyph (an apostrophe) is only read at the start of a word.
+- **Elements that cannot be told apart.** INAV draws these in the same way, so
+  only the first one on the screen is read (see above):
+  - capacity used and capacity left (mAh or Ah), and energy used and energy left (Wh);
+  - the main battery voltage and the sag-compensated one, for the pack and for the cell;
+  - the altitude and the altitude above sea level;
+  - the throttle and the scaled throttle;
+  - the current draw and the power limiter's current limit, the power and the
+    power limiter's power limit;
+  - the heading, the course hold error and the course hold adjustment;
+  - the direction of home and the direction of the nearest geofence zone;
+  - an ESC temperature and the temperature sensor that uses the second icon.
+- **Not read** (use `-unmapped` to see them on the screen):
+  - values that are not telemetry: the PIDs, rates, expo and the other settings
+    the OSD can show, and the version;
+  - graphics: the artificial horizon, the crosshair, the variometer, the map, the
+    radar, the heading graph and the throttle gauge;
+  - text with no glyph to anchor it, which only a position can find: the craft
+    and pilot names, the RC source, the plus code, the mission and multi-function
+    messages, the switch indicators, and the text of the custom elements. Only
+    the flight mode and the status message are read this way, by the position
+    found in the recording or given with `-mode` and `-msg-row`;
+  - the ADS-B warning, the formation flight element and the power limiter's burst time.
+- **Splash and statistics screens.** See [How it works](#how-it-works).
+  `AvatarG0031` also shows a constant `M0` label whose meaning is unknown.
+- **Precision.** It is what is on screen, at the OSD refresh rate (~6.6
+  frames/s). Raw flight controller telemetry cannot be recovered.
+- **Clocks.** The OSD and SRT clocks were checked to agree within about 1 s; the
+  join is not verified at millisecond level.
+- **Glyph table.** `symbols_gen.go` was generated from `osd_symbols.h` on INAV's
+  `master` branch. That header is byte for byte the same in the 9.0.0 and 9.1.0
+  releases and in `master` (checked on 2026-10-12), and the table has every one
+  of its glyphs. An older INAV, or a later one that adds glyphs, may need the table
+  regenerated.
 
 ## Project layout
 
 ```
 cmd/fpv-osd         the program: `csv` (OSD [+ SRT] -> CSV) and `dump` (diagnostics)
 internal/osd        binary parser for the .osd (Walksnail)
-internal/inav       INAV glyph table and number reading
-internal/telemetry  decoding rules (anchor glyph + number + unit)
+internal/inav       INAV glyph table, number reading and the names of the flight modes
+internal/telemetry  decoding rules by subject (anchor glyph + number + unit), unit tables, the generic pass, and the search for the flight mode and the messages
 internal/srt        .srt parser and lookup by time (Walksnail)
-internal/export     joins OSD telemetry and SRT into a table and writes it as CSV
+internal/export     joins OSD telemetry and SRT into a table and writes it as CSV or KML
 ```
 
 ## Development

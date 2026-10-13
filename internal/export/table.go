@@ -49,7 +49,11 @@ type Table struct {
 // Build lays the frames out as a table. sf may be nil; when present, each
 // frame is joined to the SRT entry that covers its timestamp.
 func Build(frames []Frame, sf *srt.File) *Table {
-	cols := candidateColumns(sf)
+	samples := make([]telemetry.Sample, len(frames))
+	for i, fr := range frames {
+		samples[i] = fr.Sample
+	}
+	cols := candidateColumns(samples, sf)
 
 	rows := make([][]string, len(frames))
 	for i, fr := range frames {
@@ -87,11 +91,12 @@ func Build(frames []Frame, sf *srt.File) *Table {
 	return t
 }
 
-// candidateColumns lists every column that could appear: the OSD ones, then
-// the ones present in the SRT (if any).
-func candidateColumns(sf *srt.File) []Column {
+// candidateColumns lists every column that could appear: the OSD ones (the
+// catalog and any reading the samples hold that no rule knows), then the ones
+// present in the SRT (if any).
+func candidateColumns(samples []telemetry.Sample, sf *srt.File) []Column {
 	var cols []Column
-	for _, f := range telemetry.Fields() {
+	for _, f := range telemetry.FieldsFor(samples) {
 		cols = append(cols, Column{Key: f.Key, Desc: f.Desc, Decimals: f.Decimals, Text: f.Text, Source: FromOSD})
 	}
 	if sf != nil {

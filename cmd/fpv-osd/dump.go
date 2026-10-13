@@ -21,7 +21,6 @@ func dumpCommand(args []string, stdout, stderr io.Writer) int {
 	frame := fs.Int("frame", 0, "frame index")
 	count := fs.Int("n", 1, "number of frames")
 	hex := fs.Bool("hex", false, "show non-ASCII glyphs by name/code")
-	stats := fs.Bool("stats", false, "show a summary of the file")
 	census := fs.Bool("census", false, "list non-numeric glyphs, their frequency and positions")
 	region := fs.String("region", "", "x,y,width: histogram of the contents of this region across all frames")
 	fs.Usage = func() {
@@ -54,8 +53,6 @@ func dumpCommand(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch {
-	case *stats:
-		outf(stdout, "%dx%d grid, %d frames, %.1f s\n", f.Cols, f.Rows, len(f.Frames), float64(f.Duration())/1000)
 	case *census:
 		printCensus(stdout, f)
 	case *region != "":

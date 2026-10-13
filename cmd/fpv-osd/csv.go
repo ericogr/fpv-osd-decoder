@@ -23,7 +23,7 @@ const (
 // csvOptions are the settings of the csv subcommand.
 type csvOptions struct {
 	osdPath, outPath, srtPath string
-	decoder                   telemetry.Options
+	layout                    layoutSpec
 	format                    export.Format
 	profile                   export.Profile
 	quiet, unmapped           bool
@@ -31,13 +31,12 @@ type csvOptions struct {
 
 // csvCommand implements "fpv-osd csv" and returns the exit code.
 func csvCommand(args []string, stdout, stderr io.Writer) int {
-	def := telemetry.DefaultOptions()
 	fs := flag.NewFlagSet("csv", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	out := fs.String("o", "", "output file (default: same name as the .osd, plus .<profile> unless it is the default profile; "+stdoutPath+" for stdout)")
 	srtPath := fs.String("srt", "", ".srt file (default: same name as the .osd, if it exists; "+noSRT+" disables)")
-	mode := fs.String("mode", def.FlightMode.String(), "x,y,width of the flight mode region on the OSD")
-	msgRow := fs.Int("msg-row", def.MessageRow, "OSD row of the status messages (-1 disables)")
+	mode := fs.String("mode", autoLayout, "x,y,width of the flight mode on the OSD, or "+autoLayout+" to find it in the recording")
+	msgRow := fs.String("msg-row", autoLayout, "OSD row of the status messages, or "+autoLayout+" to find it in the recording (-1 disables)")
 	sep := fs.String("sep", ",", "CSV column separator (use ; for Portuguese-locale spreadsheets; not for -profile maps)")
 	decimal := fs.String("decimal", ".", "decimal separator of numbers (use , for Portuguese-locale spreadsheets; not for -profile maps)")
 	profile := fs.String("profile", export.ProfileDefault.String(), "what to export: default (a CSV with every column and frame) or maps (a KML for Google My Maps: the path and up to 2000 valid GPS points)")
@@ -62,12 +61,11 @@ func csvCommand(args []string, stdout, stderr io.Writer) int {
 		osdPath:  fs.Arg(0),
 		outPath:  *out,
 		srtPath:  *srtPath,
-		decoder:  telemetry.Options{MessageRow: *msgRow},
 		quiet:    *quiet,
 		unmapped: *unmapped,
 	}
 	var err error
-	if opts.decoder.FlightMode, err = parseRegion("-mode", *mode); err != nil {
+	if opts.layout, err = parseLayout(*mode, *msgRow); err != nil {
 		outln(stderr, "error:", err)
 		return 2
 	}
@@ -107,7 +105,8 @@ func runCSV(o csvOptions, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	frames, unmapped := decodeFrames(f, telemetry.New(o.decoder))
+	decoder, layout := o.layout.resolve(f)
+	frames, unmapped := decodeFrames(f, telemetry.New(decoder))
 	table, dropped, err := o.profile.Apply(export.Build(frames, sf))
 	if err != nil {
 		return fmt.Errorf("profile %s: %w", o.profile, err)
@@ -117,7 +116,7 @@ func runCSV(o csvOptions, stdout, stderr io.Writer) error {
 		return err
 	}
 	if !o.quiet {
-		printSummary(stderr, f, sf, table, dropped)
+		printSummary(stderr, f, sf, layout, table, dropped)
 	}
 	if o.unmapped {
 		printUnmapped(stderr, unmapped, len(f.Frames))
@@ -188,18 +187,23 @@ func basePath(path string) string {
 	return strings.TrimSuffix(path, filepath.Ext(path))
 }
 
-func printSummary(w io.Writer, f *osd.File, sf *srt.File, t *export.Table, dropped export.Reduction) {
+func printSummary(w io.Writer, f *osd.File, sf *srt.File, layout string, t *export.Table, dropped export.Reduction) {
 	outf(w, "OSD: %dx%d grid, %d frames, %.1f s\n", f.Cols, f.Rows, len(f.Frames), float64(f.Duration())/1000)
 	if sf != nil {
 		outf(w, "SRT: %d entries\n", len(sf.Entries))
 	}
+	outln(w, layout)
 	if dropped.Total() > 0 {
 		outf(w, "rows written: %d of %d frames (left out: %d without a valid GPS position, %d repeating the previous position, %d thinned to fit the row limit)\n",
 			len(t.Rows), len(f.Frames), dropped.NoGPS, dropped.Repeated, dropped.Thinned)
 	}
 	outf(w, "columns (%d), with the number of rows in which each value appeared:\n", len(t.Columns))
+	width := 22
 	for _, c := range t.Columns {
-		outf(w, "  %-22s %6d/%d  %s\n", c.Key, c.Frames, len(t.Rows), c.Desc)
+		width = max(width, len(c.Key))
+	}
+	for _, c := range t.Columns {
+		outf(w, "  %-*s %6d/%d  %s\n", width, c.Key, c.Frames, len(t.Rows), c.Desc)
 	}
 }
 

@@ -76,6 +76,40 @@ func TestCSVSampleFlight(t *testing.T) {
 	}
 }
 
+// The frame right before the statistics shows the layout INAV uses when
+// disarmed, which has elements the flight layout lacks: the rules built from
+// the firmware source read them, with the values that are on screen.
+func TestCSVSampleFlightDisarmedLayout(t *testing.T) {
+	recs := readCSV(t, ',')
+	idx := columns(recs[0])
+	row := recs[6586] // frame 6585
+	want := map[string]string{
+		"t_ms": "986745", "osd_flight_time_s": "979", "osd_on_time_s": "1259",
+		"osd_imu_temp_c": "40", "osd_baro_temp_c": "42", "osd_odometer_km": "10.3",
+	}
+	for col, w := range want {
+		j, ok := idx[col]
+		if !ok {
+			t.Errorf("column %s missing from the header", col)
+			continue
+		}
+		if row[j] != w {
+			t.Errorf("%s = %q, want %q", col, row[j], w)
+		}
+	}
+	// nothing the generic pass could take is in this flight, and the
+	// statistics screen (it has a blackbox log number) is not read
+	for col := range idx {
+		if strings.HasPrefix(col, "osd_raw_") || col == "osd_blackbox_log" {
+			t.Errorf("unexpected column %s", col)
+		}
+	}
+	// the splash screen at the start does show the position
+	if got := recs[1][idx["osd_gps_lat"]]; got != "-23.299915" {
+		t.Errorf("osd_gps_lat in frame 0 = %q, want the position on the splash screen", got)
+	}
+}
+
 // With ; and , the "3.6" from the Sheets example must not come out with a
 // point, and the texts must not be altered.
 func TestCSVBrazilianFormat(t *testing.T) {

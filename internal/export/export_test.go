@@ -131,6 +131,52 @@ func TestBuildJoinsByTimeAndLeavesGapsEmpty(t *testing.T) {
 	}
 }
 
+// The readings no rule knows become columns too: after the OSD ones, before
+// the SRT ones, sorted by name, with the number as it was read.
+func TestBuildAddsTheGenericColumns(t *testing.T) {
+	sf, err := srt.Parse(strings.NewReader(subtitles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := []Frame{
+		{0, telemetry.Sample{"osd_gps_sats": {Num: 12}, "osd_raw_b": {Num: 3.6912345}}},
+		{150, telemetry.Sample{"osd_raw_a": {Num: 7}, "osd_raw_b": {Num: -1}}},
+		{300, telemetry.Sample{}},
+	}
+	tab := Build(frames, sf)
+	var keys []string
+	for _, c := range tab.Columns {
+		keys = append(keys, c.Key)
+	}
+	want := "osd_gps_sats osd_raw_a osd_raw_b srt_signal srt_latency_ms srt_foo_db"
+	if got := strings.Join(keys, " "); got != want {
+		t.Fatalf("columns = %q, want %q", got, want)
+	}
+	rawB := tab.Columns[2]
+	if rawB.Source != FromOSD || rawB.Text || rawB.Frames != 2 || rawB.Desc == "" {
+		t.Errorf("osd_raw_b = %+v", rawB)
+	}
+	if got := tab.Rows[0][2]; got != "3.6912345" {
+		t.Errorf("a generic value must keep all its digits: %q", got)
+	}
+	if got := tab.Rows[1][1] + "|" + tab.Rows[1][2]; got != "7|-1" {
+		t.Errorf("row 1 = %q", got)
+	}
+}
+
+// No generic reading, no generic column: every OSD column is in the catalog.
+func TestBuildWithoutGenericColumns(t *testing.T) {
+	inCatalog := map[string]bool{}
+	for _, f := range telemetry.Fields() {
+		inCatalog[f.Key] = true
+	}
+	for _, c := range flight(t).Columns {
+		if c.Source == FromOSD && !inCatalog[c.Key] {
+			t.Errorf("unexpected column %s", c.Key)
+		}
+	}
+}
+
 func TestBuildWithoutSRT(t *testing.T) {
 	tab := Build([]Frame{{0, telemetry.Sample{"osd_gps_sats": {Num: 12}}}}, nil)
 	if len(tab.Columns) != 1 || tab.Columns[0].Key != "osd_gps_sats" || tab.Rows[0][0] != "12" {
@@ -391,7 +437,7 @@ func TestMapsAttributesExist(t *testing.T) {
 		t.Fatal(err)
 	}
 	known := map[string]bool{}
-	for _, c := range candidateColumns(sf) {
+	for _, c := range candidateColumns(nil, sf) {
 		known[c.Key] = true
 	}
 	seen := map[string]bool{}

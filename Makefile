@@ -7,7 +7,7 @@ DECIMAL ?= ,
 FILES   ?= $(wildcard *.osd)
 
 # Input for the run target: make run FILE=flight.osd ARGS="-sep ';' -decimal ','"
-# CMD picks the subcommand: csv (default) or dump, e.g. make run CMD=dump ARGS=-stats
+# CMD picks the subcommand: csv (default) or dump, e.g. make run CMD=dump ARGS=-census
 CMD  ?= csv
 FILE ?= AvatarG0031.osd
 ARGS ?=

@@ -2,6 +2,8 @@ package telemetry
 
 import (
 	"math"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ericogr/fpv-osd-decoder/internal/inav"
@@ -14,6 +16,12 @@ const cols, rows = 53, 20
 func td(n int) uint16 { return 0xA1 + uint16(n) }
 func ld(n int) uint16 { return 0xB1 + uint16(n) }
 
+// sampleLayout is where the sample recording shows the flight mode and the
+// status messages.
+func sampleLayout() Options {
+	return Options{FlightModes: []Region{{X: 45, Y: 16, Width: 4}}, MessageRow: 13}
+}
+
 func newFile() *osd.File {
 	cells := make([]uint16, cols*rows)
 	for i := range cells {
@@ -23,7 +31,8 @@ func newFile() *osd.File {
 }
 
 // put writes into the grid starting at (x, y): strings become ASCII, uint16
-// values become the glyph with the same code.
+// values become the glyph with the same code, and a []any (such as the result
+// of inavNum) is written part by part.
 func put(f *osd.File, x, y int, parts ...any) {
 	cells := f.Frames[0].Cells
 	for _, p := range parts {
@@ -36,21 +45,62 @@ func put(f *osd.File, x, y int, parts ...any) {
 		case uint16:
 			cells[y*cols+x] = v
 			x++
+		case []any:
+			for _, q := range v {
+				put(f, x, y, q)
+				x += width(q)
+			}
 		default:
 			panic("unexpected type")
 		}
 	}
 }
 
+// width is the number of cells put writes for one part.
+func width(p any) int {
+	switch v := p.(type) {
+	case string:
+		return len(v)
+	case uint16:
+		return 1
+	case []any:
+		n := 0
+		for _, q := range v {
+			n += width(q)
+		}
+		return n
+	}
+	panic("unexpected type")
+}
+
+// inavNum writes a number the way INAV does: the decimal point is folded into
+// the digits on each side of it ("3.69" is [3.][.6]9).
+func inavNum(s string) []any {
+	dot := strings.IndexByte(s, '.')
+	if dot < 0 {
+		return []any{s}
+	}
+	whole, frac := s[:dot], s[dot+1:]
+	var parts []any
+	if head := whole[:len(whole)-1]; head != "" {
+		parts = append(parts, head)
+	}
+	parts = append(parts, td(int(whole[len(whole)-1]-'0')), ld(int(frac[0]-'0')))
+	if len(frac) > 1 {
+		parts = append(parts, frac[1:])
+	}
+	return parts
+}
+
 func decode(t *testing.T, f *osd.File) Sample {
 	t.Helper()
-	s, _ := New(DefaultOptions()).Decode(f, &f.Frames[0])
+	s, _ := New(sampleLayout()).Decode(f, &f.Frames[0])
 	known := map[string]bool{}
 	for _, fld := range Fields() {
 		known[fld.Key] = true
 	}
 	for k := range s {
-		if !known[k] {
+		if !known[k] && !isExtraKey(k) {
 			t.Errorf("key %q is not in the catalog", k)
 		}
 	}
@@ -203,7 +253,7 @@ func TestLeftoversIgnoreGraphics(t *testing.T) {
 	put(f, 21, 12, inav.SymAhHStart, uint16(0x14d), uint16(0x14e)) // horizon
 	put(f, 25, 11, inav.SymAhChType7, inav.SymAhChType7+1)         // crosshair
 	put(f, 25, 17, "M0")
-	_, left := New(DefaultOptions()).Decode(f, &f.Frames[0])
+	_, left := New(sampleLayout()).Decode(f, &f.Frames[0])
 	if len(left) != 1 || left[0] != (Leftover{X: 25, Y: 17, Text: "M0"}) {
 		t.Errorf("leftovers = %+v, want only M0", left)
 	}
@@ -217,11 +267,70 @@ func TestModeRegionOutsideGrid(t *testing.T) {
 		{X: cols + 10, Y: 16, Width: 4},
 		{X: -1, Y: 16, Width: 4},
 	} {
-		opts := Options{FlightMode: region, MessageRow: -1}
+		opts := Options{FlightModes: []Region{region}, MessageRow: -1}
 		s, _ := New(opts).Decode(f, &f.Frames[0])
 		if _, ok := s[keyFlightMode]; ok {
 			t.Errorf("%+v: read a flight mode outside the grid", region)
 		}
+	}
+}
+
+// The message is the text the rules left on its row: another element there is
+// read as itself and is not part of the message.
+func TestMessageIsNotMixedWithOtherElements(t *testing.T) {
+	f := newFile()
+	put(f, 8, 13, "EN ROUTE TO HOME")
+	put(f, 44, 13, "213", inav.SymAltM)
+	s, left := New(sampleLayout()).Decode(f, &f.Frames[0])
+	if got := s[keyMessage].Text; got != "EN ROUTE TO HOME" {
+		t.Errorf("message = %q, want %q", got, "EN ROUTE TO HOME")
+	}
+	checkNum(t, s, map[string]float64{"osd_altitude_m": 213})
+	if len(left) != 0 {
+		t.Errorf("leftovers = %+v, want none", left)
+	}
+}
+
+// The text of a message that looks like a reading is still the message.
+func TestMessageKeepsTextThatLooksLikeAReading(t *testing.T) {
+	f := newFile()
+	put(f, 10, 13, "TO WP 3/5 (1.2KM)")
+	s, _ := New(sampleLayout()).Decode(f, &f.Frames[0])
+	if got := s[keyMessage].Text; got != "TO WP 3/5 (1.2KM)" {
+		t.Errorf("message = %q", got)
+	}
+	if _, ok := s["osd_pitch_deg"]; ok {
+		t.Error("the P of WP was read as a level pitch")
+	}
+}
+
+// Taking the message off its row leaves what is not text for the generic pass.
+func TestMessageRowKeepsWhatIsNotText(t *testing.T) {
+	f := newFile()
+	put(f, 8, 13, "LANDING")
+	put(f, 30, 13, unknownIcon, "42")
+	s, _ := New(sampleLayout()).Decode(f, &f.Frames[0])
+	if got := s[keyMessage].Text; got != "LANDING" {
+		t.Errorf("message = %q, want LANDING", got)
+	}
+	checkNum(t, s, map[string]float64{"osd_raw_telemetry_0": 42})
+}
+
+// With one strip, whatever is there is the mode. With several (one per layout)
+// only a text the element can show counts, since the strip of another layout
+// may hold something else.
+func TestSeveralFlightModeStrips(t *testing.T) {
+	a, b := Region{X: 45, Y: 16, Width: 4}, Region{X: 10, Y: 3, Width: 4}
+	f := newFile()
+	put(f, 45, 16, "12")
+	put(f, 10, 3, "ANGL")
+	opts := Options{FlightModes: []Region{a, b}, MessageRow: -1}
+	if s, _ := New(opts).Decode(f, &f.Frames[0]); s[keyFlightMode].Text != "ANGL" {
+		t.Errorf("mode = %q with two strips, want ANGL", s[keyFlightMode].Text)
+	}
+	opts.FlightModes = []Region{a}
+	if s, _ := New(opts).Decode(f, &f.Frames[0]); s[keyFlightMode].Text != "12" {
+		t.Errorf("mode = %q with one strip, want what is there", s[keyFlightMode].Text)
 	}
 }
 
@@ -242,5 +351,21 @@ func TestFieldsReturnsACopy(t *testing.T) {
 	a[0].Key = "changed"
 	if b := Fields(); b[0].Key == "changed" {
 		t.Error("Fields exposes the internal catalog")
+	}
+}
+
+// The decoder keeps nothing between frames: what it reads from a frame does not
+// depend on the frames it decoded before.
+func TestDecoderKeepsNothingBetweenFrames(t *testing.T) {
+	d := New(sampleLayout())
+	a := frame3000()
+	first, _ := d.Decode(a, &a.Frames[0])
+	b := newFile()
+	if s, _ := d.Decode(b, &b.Frames[0]); len(s) != 0 {
+		t.Errorf("a blank frame after a full one read %v", s)
+	}
+	again, _ := d.Decode(a, &a.Frames[0])
+	if !reflect.DeepEqual(first, again) {
+		t.Error("decoding the same frame twice gave different readings")
 	}
 }
